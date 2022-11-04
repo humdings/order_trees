@@ -10,7 +10,7 @@ setup(
     url='https://github.com/humdings/order_trees',
     author='David Edwards',
     author_email='humdings@gmail.com',
-    # license='MIT',
+    license='MIT',
     classifiers=[
         'Operating System :: OS Independent',
         'Intended Audience :: Developers',
