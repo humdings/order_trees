@@ -1,12 +1,12 @@
 import os
-import logbook
+import logging
 import shutil
 import pandas as pd
 from pprint import pprint
 
 from order_trees.json_cache import JsonCache, FILE_EXT, ID
 
-log = logbook.Logger(__name__.split(".")[-1])
+log = logging.getLogger(__name__)
 
 # Various Constants/names used throughout.
 # There's still some floating magic strings though.
@@ -19,6 +19,9 @@ BUY = 'buy'
 SELL = 'sell'
 STAGED = 'staged'
 TARGET_PRICE = 'target_price'
+AMOUNT = 'amount'
+REMAINING_AMOUNT = 'remaining_amount'
+SYMBOL = 'symbol'
 
 
 class OrderTree(JsonCache):
@@ -81,14 +84,16 @@ class OrderTree(JsonCache):
 
     @classmethod
     def lookup_order(cls, order_id):
-        """Iterate through actual files."""
+        """Iterate through actual files. Choke point"""
         all_ids = cls.all_order_ids()
         if str(order_id) in all_ids:
             return cls.from_order_id(order_id)
         else:
             for oid in all_ids:
                 order = cls.from_order_id(oid)
-                if str(order[ORDER_ID_FIELD]) == str(order_id):
+                other_oid = str(order[ORDER_ID_FIELD])
+                if other_oid == str(order_id):
+                    cls._ORDER_MAP[other_oid] = order[ID]
                     return order
         return None
 
@@ -126,6 +131,7 @@ class OrderTree(JsonCache):
                     amount,
                     target_price,
                     side,
+                    staged=True,
                     stop_price=None,
                     order_type=None,
                     account=None,
@@ -139,12 +145,12 @@ class OrderTree(JsonCache):
             ORDER_ID_FIELD: id_,  # Make it a default
             SIDE: side,
             TARGET_PRICE: target_price,
-            STAGED: True,
-            'symbol': symbol,
+            STAGED: staged,
+            AMOUNT: amount,
+            REMAINING_AMOUNT: amount,
+            SYMBOL: symbol,
             'size': amount,
-            'amount': amount,
             'original_amount': amount,
-            'remaining_amount': amount,
             '_stop_price': stop_price,
             'original_side': side,
             '_order_type': order_type,
@@ -174,9 +180,9 @@ class OrderTree(JsonCache):
 
         def get_amount(order):
             """ helper to get size """
-            amount = float(order['amount'])
-            if 'remaining_amount' in order:
-                amount = min(amount, float(order['remaining_amount']))
+            amount = float(order[AMOUNT])
+            if REMAINING_AMOUNT in order:
+                amount = min(amount, float(order[REMAINING_AMOUNT]))
             return amount
 
         consuming_order = order_list[0]
@@ -204,7 +210,7 @@ class OrderTree(JsonCache):
         target = round(total_value / total_size, price_prec)
 
         kwargs = {
-            'amount': size,
+            AMOUNT: size,
             TARGET_PRICE: target,
             '_dt': pd.Timestamp.utcnow(),
             'original_amount': size,
