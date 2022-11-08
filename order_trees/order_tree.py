@@ -19,6 +19,7 @@ BUY = 'buy'
 SELL = 'sell'
 STAGED = 'staged'
 TARGET_PRICE = 'target_price'
+STOP_PRICE = 'stop_price'
 AMOUNT = 'amount'
 REMAINING_AMOUNT = 'remaining_amount'
 SYMBOL = 'symbol'
@@ -84,16 +85,30 @@ class OrderTree(JsonCache):
 
     @classmethod
     def lookup_order(cls, order_id):
-        """Iterate through actual files. Choke point"""
+        """
+        Iterates through actual files to check if the
+        id passed is the `order_id` and not the `_id`. 
+
+        Choke point, but finds the order if it's there.
+
+        Returns None if not found.
+        """
+        order_id = str(order_id)
+
+        if order_id in cls._ORDER_MAP or order_id in cls._CACHE:
+            return cls.from_order_id(order_id)
+
         all_ids = cls.all_order_ids()
-        if str(order_id) in all_ids:
+        if order_id in all_ids:
             return cls.from_order_id(order_id)
         else:
             for oid in all_ids:
                 order = cls.from_order_id(oid)
                 other_oid = str(order[ORDER_ID_FIELD])
-                if other_oid == str(order_id):
-                    cls._ORDER_MAP[other_oid] = order[ID]
+                # Make sure order_id is mapped.
+                cls._ORDER_MAP[other_oid] = order[ID]
+                if other_oid == order_id:
+
                     return order
         return None
 
@@ -149,9 +164,9 @@ class OrderTree(JsonCache):
             AMOUNT: amount,
             REMAINING_AMOUNT: amount,
             SYMBOL: symbol,
+            STOP_PRICE: stop_price,
             'size': amount,
             'original_amount': amount,
-            '_stop_price': stop_price,
             'original_side': side,
             '_order_type': order_type,
             'account': account,
@@ -169,8 +184,14 @@ class OrderTree(JsonCache):
                        price_prec=2,
                        complete=False):
         """
-        combines orders with the same side. 
-        Only price/size considered.
+        combines orders with the same side as 
+        the first order in the list.
+
+        Only price/size is considered.
+        
+        Returns a modified order with:
+            target_price = size weighted average price
+            amount = sum of the order sizes. 
 
         first order id in the list is kept,
         the rest are discarded.
@@ -248,16 +269,35 @@ class OrderTree(JsonCache):
 
     def is_triggered(self, price):
         """
-        Checks if the limit price has been hit.
-
-        Stops not implemented yet. 
+        Returns True if the limit or stop price has been hit.
         """
         if not self.is_staged():
             return False
+
+        if self.is_limit_triggered(price):
+            return True
+
+        if self.is_stop_triggered(price):
+            return True
+
+        return False
+
+    def is_limit_triggered(self, price):
         if self[SIDE] == BUY:
             return float(price) <= float(self[TARGET_PRICE])
         elif self[SIDE] == SELL:
             return float(price) >= float(self[TARGET_PRICE])
+        else:
+            raise RuntimeError(f"Order Side not valid: {self.data}")
+
+    def is_stop_triggered(self, price):
+        stop = self.get(STOP_PRICE)
+        if not stop:  # False, None, or 0 should work
+            return False
+        if self[SIDE] == BUY:
+            return float(price) >= float(self[STOP_PRICE])
+        elif self[SIDE] == SELL:
+            return float(price) <= float(self[STOP_PRICE])
         else:
             raise RuntimeError(f"Order Side not valid: {self.data}")
 
