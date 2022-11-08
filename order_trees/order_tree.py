@@ -66,6 +66,15 @@ class OrderTree(JsonCache):
         ]
 
     @classmethod
+    def to_frame(cls):
+        """
+        Load all files into a pandas DataFrame.
+        """
+        return pd.DataFrame(
+            cls.from_order_id(id_).data
+            for id_ in cls.all_order_ids()).set_index(ID)
+
+    @classmethod
     def staged_orders(cls):
         """
         Return all order with the `staged` field True
