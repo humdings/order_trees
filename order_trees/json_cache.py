@@ -87,7 +87,7 @@ class JsonCache(object):
         self.dump()
 
     def update(self, *args, **kwargs):
-        with self as self:
+        with self:
             self.data.update(*args, **kwargs)
 
     def get(self, key, default=None):

@@ -8,7 +8,7 @@ from order_trees.json_cache import JsonCache, FILE_EXT, ID
 
 log = logging.getLogger(__name__)
 
-# Various Constants/names used throughout.
+# Various labels/names used throughout.
 # There's still some floating magic strings though.
 ORDER_ID_FIELD = 'order_id'
 PARENT_ID = 'parent_id'
@@ -23,6 +23,7 @@ STOP_PRICE = 'stop_price'
 AMOUNT = 'amount'
 REMAINING_AMOUNT = 'remaining_amount'
 SYMBOL = 'symbol'
+ACCOUNT = 'account'
 
 
 class OrderTree(JsonCache):
@@ -174,11 +175,11 @@ class OrderTree(JsonCache):
             REMAINING_AMOUNT: amount,
             SYMBOL: symbol,
             STOP_PRICE: stop_price,
+            ACCOUNT: account,
             'size': amount,
             'original_amount': amount,
             'original_side': side,
             '_order_type': order_type,
-            'account': account,
             '_dt': str(pd.Timestamp.utcnow())
         }
         data.update(kwargs)
