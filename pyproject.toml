@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "order_trees"
+version = "0.1.0"
+description = "File-mirrored dicts. A mapping in memory that stays in sync with a file."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "David Edwards", email = "humdings@gmail.com" }]
+dependencies = []
+
+[project.optional-dependencies]
+fast = ["orjson"]
+watch = ["watchfiles"]
+frame = ["pandas"]
+dev = ["pytest", "orjson"]
+
+[tool.setuptools.packages.find]
+include = ["order_trees*"]
+
+[tool.setuptools.package-data]
+order_trees = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
