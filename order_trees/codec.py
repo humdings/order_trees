@@ -35,6 +35,9 @@ def _json_default(obj: Any) -> Any:
         return obj.isoformat()
     if type(obj).__name__ == "Timestamp":
         return str(obj)
+    # numpy scalars (and similar) without importing numpy.
+    if type(obj).__module__ == "numpy" and callable(getattr(obj, "item", None)):
+        return obj.item()
     raise TypeError(f"cannot encode {type(obj).__name__}")
 
 

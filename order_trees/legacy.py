@@ -236,10 +236,22 @@ class OrderTree(JsonCache):
         except ImportError as exc:
             raise ImportError("OrderTree.to_frame() requires pandas") from exc
         rows = [dict(cls.from_order_id(id_).data) for id_ in cls.all_order_ids()]
-        frame = pd.DataFrame(rows)
-        if rows:
-            return frame.set_index(ID)
-        return frame
+        columns = [
+            ID,
+            ORDER_ID_FIELD,
+            SYMBOL,
+            SIDE,
+            AMOUNT,
+            REMAINING_AMOUNT,
+            TARGET_PRICE,
+            STOP_PRICE,
+            STAGED,
+            ACCOUNT,
+        ]
+        frame = pd.DataFrame(rows, columns=columns) if not rows else pd.DataFrame(rows)
+        if ID not in frame.columns:
+            frame[ID] = None
+        return frame.set_index(ID)
 
     @classmethod
     def staged_orders(cls) -> list["OrderTree"]:
@@ -252,8 +264,12 @@ class OrderTree(JsonCache):
 
     @classmethod
     def from_order_id(cls, order_id: Any) -> "OrderTree":
-        order_id = cls._ORDER_MAP.get(order_id, order_id)
-        return cls.from_id(order_id)
+        mapped = cls._ORDER_MAP.get(order_id)
+        if mapped is None and order_id is not None:
+            mapped = cls._ORDER_MAP.get(str(order_id))
+        if mapped is None:
+            mapped = order_id
+        return cls.from_id(mapped)
 
     @classmethod
     def lookup_order(cls, order_id: Any) -> Optional["OrderTree"]:
@@ -275,8 +291,10 @@ class OrderTree(JsonCache):
     @classmethod
     def reset_order_id_cache(cls) -> None:
         for oid in cls.all_order_ids():
-            order = cls.from_order_id(oid)
-            cls._ORDER_MAP[order[ORDER_ID_FIELD]] = oid
+            order = cls.from_id(oid)
+            broker_id = order[ORDER_ID_FIELD]
+            cls._ORDER_MAP[broker_id] = oid
+            cls._ORDER_MAP[str(broker_id)] = oid
 
     @classmethod
     def delete_order_id(cls, order_id: Any) -> None:
@@ -382,11 +400,12 @@ class OrderTree(JsonCache):
                 "original_amount": size,
             }
         )
+        included_ids = [order._id for order in orders_included]
         if complete:
-            for order in orders_included:
-                cls.complete_order_id(order[ID])
-        for order in orders_included:
-            cls.delete_order_id(order[ID])
+            for id_ in included_ids:
+                cls.complete_order_id(id_)
+        for id_ in included_ids:
+            cls.delete_order_id(id_)
         return consuming_order
 
     def move_completed(self) -> "OrderTree":
@@ -412,9 +431,15 @@ class OrderTree(JsonCache):
         type(self)._CACHE.pop(id_, None)
         return self
 
+    @property
+    def order_id(self) -> Any:
+        """Broker id field. ``getattr(order, "order_id")`` is how the monitor scans."""
+        return self.get(ORDER_ID_FIELD)
+
     def set_order_id(self, order_id: Any) -> None:
         _id = self.data.get(ID, order_id)
         self._ORDER_MAP[order_id] = _id
+        self._ORDER_MAP[str(order_id)] = _id
         self[ORDER_ID_FIELD] = order_id
 
     def is_staged(self) -> bool:
