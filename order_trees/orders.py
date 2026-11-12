@@ -1,7 +1,6 @@
-"""Order-record factories.
+"""Helpers that fill the historical record dict.
 
-Nothing in here is used by ``FileMap`` or ``DirMap``. Callers that want the
-old field set build it with ``new_order_record`` and store it themselves.
+``FileMap`` and ``DirMap`` do not call these.
 """
 
 from __future__ import annotations
@@ -27,8 +26,8 @@ from order_trees.constants import (
 def now_text() -> str:
     """Timestamp string for ``_dt``.
 
-    Uses ``str(pandas.Timestamp.utcnow())`` when pandas is installed, which
-    is what the old ``stage_order`` wrote. Otherwise an ISO-8601 UTC time.
+    Uses ``str(pandas.Timestamp.utcnow())`` when pandas is installed.
+    Otherwise an ISO-8601 UTC time.
     """
     try:
         import pandas as pd
@@ -48,11 +47,10 @@ def new_order_record(
     account: Any = None,
     **extra: Any,
 ) -> dict[str, Any]:
-    """Return an order dict. Does not touch the filesystem.
+    """Return a record dict. Does not touch the filesystem.
 
     ``**extra`` is applied last, so it can override any field, including
-    ``_id`` and the link fields ``parent_id``, ``next_buy_id``, and
-    ``next_sell_id``.
+    ``_id``.
     """
     id_ = uuid.uuid4().hex
     data: dict[str, Any] = {
@@ -88,7 +86,7 @@ def stage_order(
     account: Any = None,
     **extra: Any,
 ) -> str:
-    """Write one order into a directory mapping. Returns the ``_id``."""
+    """Store one record in a directory mapping. Returns the ``_id``."""
     record = new_order_record(
         symbol,
         amount,

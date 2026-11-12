@@ -1,8 +1,8 @@
-"""File-mirrored mappings, plus the legacy order-tree API.
+"""File-mirrored mappings.
 
-``FileMap`` and ``DirMap`` are dicts backed by files. Order-specific field
-defaults, id generation, and symbol folders live in the factories and in
-``JsonCache`` / ``OrderTree``.
+``FileMap`` and ``DirMap`` are dicts backed by files. Older constructors
+that take a record and a directory live next to them and do not change
+how those mappings work.
 """
 
 from order_trees.codec import Codec, JsonCodec, RobustJSONEncoder

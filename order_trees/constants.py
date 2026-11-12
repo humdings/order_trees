@@ -1,7 +1,6 @@
-"""Field names shared by the legacy order files.
+"""String constants for the historical record class.
 
-The generic mapping does not use these. The order factories and the
-compatibility layer do.
+``FileMap`` and ``DirMap`` do not read these.
 """
 
 FILE_EXT = ".json"
@@ -22,7 +21,6 @@ REMAINING_AMOUNT = "remaining_amount"
 SYMBOL = "symbol"
 ACCOUNT = "account"
 
-# Fields humdesk's legacy order files carry. Link fields are optional.
 ORDER_FIELDS = (
     ID,
     ORDER_ID_FIELD,

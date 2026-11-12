@@ -7,17 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from order_trees import DirMap, symbol_order_dir, stage_order
+from order_trees import DirMap
 from order_trees.atomic import atomic_write
 
 
 def test_key_is_filename(tmp_path: Path) -> None:
     book = DirMap(tmp_path)
-    book["a"] = {"symbol": "AAPL", "amount": 1}
+    book["a"] = {"name": "alpha", "count": 1}
     assert (tmp_path / "a.json").is_file()
-    assert book["a"]["symbol"] == "AAPL"
-    book["a"]["amount"] = 4
-    assert json.loads((tmp_path / "a.json").read_text())["amount"] == 4
+    assert book["a"]["name"] == "alpha"
+    book["a"]["count"] = 4
+    assert json.loads((tmp_path / "a.json").read_text())["count"] == 4
     assert set(book) == {"a"}
     del book["a"]
     assert "a" not in book
@@ -25,10 +25,12 @@ def test_key_is_filename(tmp_path: Path) -> None:
 
 
 def test_ignores_subdirs_dotfiles_and_lock(tmp_path: Path) -> None:
-    book = symbol_order_dir(tmp_path, "AAPL")
-    (book.path / "completed" / "gone.json").write_text("{}")
-    (book.path / ".hidden.json").write_text("{}")
-    (book.path / ".order_trees.lock").write_text("")
+    book = DirMap(tmp_path)
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "gone.json").write_text("{}")
+    (tmp_path / ".hidden.json").write_text("{}")
+    (tmp_path / ".dirmap.lock").write_text("")
     book["live"] = {"n": 1}
     assert list(book) == ["live"]
 
@@ -118,15 +120,6 @@ def test_bad_keys(tmp_path: Path) -> None:
         book[".secret"] = {"n": 1}
     with pytest.raises(TypeError):
         book["a"] = "nope"  # type: ignore[assignment]
-
-
-def test_stage_order_helper(tmp_path: Path) -> None:
-    book = symbol_order_dir(tmp_path / "orders", "MSFT")
-    id_ = stage_order(book, "MSFT", 2, 50, "sell", account="DU1")
-    assert (book.path / f"{id_}.json").is_file()
-    assert book[id_]["symbol"] == "MSFT"
-    assert book[id_]["remaining_amount"] == 2
-    assert (book.path / "completed").is_dir()
 
 
 def test_not_a_directory(tmp_path: Path) -> None:

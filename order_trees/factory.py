@@ -1,8 +1,7 @@
-"""Directories of orders.
+"""Directory-bound legacy classes, and plain directory mappings.
 
-``order_book_for_directory`` and ``create_cache_for_directory`` still return
-classes, which is what the legacy callers construct. ``open_order_dir`` and
-``symbol_order_dir`` return a ``DirMap``.
+The class factories return a subclass bound to one path. ``open_order_dir``
+and ``symbol_order_dir`` return a ``DirMap``.
 """
 
 from __future__ import annotations
@@ -17,11 +16,12 @@ from order_trees.legacy import JsonCache, OrderTree
 
 
 def order_book_for_directory(path: str | os.PathLike[str], use_cache: bool = True):
-    """Return an ``OrderTree`` subclass bound to *path*.
+    """Return a record class bound to *path*.
 
-    Creates *path* and *path*/``completed``. ``use_cache=False`` rebuilds the
-    object on every ``from_id`` and parses on every lookup. ``use_cache=True``
-    keeps the object but still reloads when the file changes.
+    Creates *path* and a side directory named ``completed``.
+    ``use_cache=False`` rebuilds the object on every ``from_id`` and parses
+    on every lookup. ``use_cache=True`` keeps the object and still reloads
+    when the file changes.
     """
     path = os.fspath(path)
     ensure_directory(path)
@@ -61,7 +61,7 @@ def open_order_dir(
     lock: Any = None,
     write_through: bool = True,
 ) -> DirMap:
-    """Directory of order files. Does not create ``completed/`` or fill fields."""
+    """``DirMap`` for *path*. Does not create a side directory or fill fields."""
     return DirMap(
         path,
         codec,
@@ -80,13 +80,12 @@ def symbol_order_dir(
     lock: Any = None,
     write_through: bool = True,
 ) -> DirMap:
-    """``root/symbol/*.json``, plus a ``completed/`` folder that is not a key.
+    """``DirMap`` at ``root/<segment>``, plus a side directory that is not a key.
 
-    *symbol* is one path segment. The order documents themselves are not
-    given default fields; use ``new_order_record`` or ``stage_order``.
+    *symbol* is one path segment. Records are not given default fields.
     """
     if not isinstance(symbol, str) or not symbol or "/" in symbol or "\\" in symbol:
-        raise ValueError("symbol must be a single path segment")
+        raise ValueError("segment must be a single path component")
     path = Path(root) / symbol
     ensure_directory(path)
     ensure_directory(path / "completed")

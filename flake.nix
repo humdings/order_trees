@@ -1,5 +1,5 @@
 {
-  description = "order_trees: file-mirrored mappings";
+  description = "File-mirrored mappings";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
 

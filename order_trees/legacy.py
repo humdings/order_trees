@@ -1,21 +1,18 @@
-"""Compatibility layer for the class-based order cache.
+"""Older per-file constructors.
 
-``FileMap`` does not generate ids or fill order fields. ``JsonCache`` and
-``OrderTree`` still do, because existing callers construct them that way.
+``FileMap`` does not generate ids or fill a default record. ``JsonCache``
+and its subclass still do, because existing callers construct them that way.
 
-``use_cache=True`` (the old default) used to pin the first parse in memory
-and ignore later edits to the file. Lookups now stat the file and reload
-when ``mtime_ns``, size, or inode changes. ``use_cache=False`` still forces
-``from_id`` to build a new object every call, and parses on every lookup.
+``use_cache=True`` keeps the object and reloads when ``mtime_ns``, size, or
+inode changes. ``use_cache=False`` builds a new object on every ``from_id``
+and parses on every lookup.
 
-``with obj:`` still writes on the way out, including when the block raises,
-matching the old context manager. Nested edits of ``obj.data`` are not
-write-through; call ``dump()`` or leave the ``with`` block. Item assignment
-(``obj[key] = value``) writes immediately.
+``with obj:`` writes on the way out, including when the block raises.
+Edits of ``obj.data`` are not write-through; call ``dump()`` or leave the
+``with`` block. Item assignment writes immediately.
 
-``move_completed`` still moves the file under ``completed/`` and leaves
-``filename`` pointing at the active directory. A later ``dump()`` creates
-the active file again, which is what the old ``dump`` did.
+Moving a record into a side directory leaves ``filename`` on the original
+path. A later ``dump()`` creates that file again.
 """
 
 from __future__ import annotations
@@ -182,10 +179,10 @@ def _read_bytes(filepath: str) -> bytes:
 
 
 class OrderTree(JsonCache):
-    """Legacy order object: one JSON file plus tree helpers.
+    """Historical record class: one JSON file, plus optional links between records.
 
-    Field filling and id rules live here, not on ``FileMap``. ``data`` may
-    be omitted; the old constructor required a dict and raised ``AttributeError``.
+    Default fields and id rules live here, not on ``FileMap``. ``data`` may
+    be omitted.
     """
 
     _CACHE: dict[str, "OrderTree"] = {}
@@ -227,7 +224,7 @@ class OrderTree(JsonCache):
 
     @classmethod
     def to_frame(cls):
-        """Load every order in this directory into a pandas DataFrame.
+        """Load every record in this directory into a pandas DataFrame.
 
         Pandas is not a dependency of the package. Import it before calling.
         """
@@ -273,7 +270,7 @@ class OrderTree(JsonCache):
 
     @classmethod
     def lookup_order(cls, order_id: Any) -> Optional["OrderTree"]:
-        """Find an order by ``_id`` or ``order_id``. ``None`` when absent."""
+        """Find a record by ``_id`` or its secondary id. ``None`` when absent."""
         order_id = str(order_id)
         if order_id in cls._ORDER_MAP or order_id in cls._CACHE:
             return cls.from_order_id(order_id)
@@ -292,9 +289,9 @@ class OrderTree(JsonCache):
     def reset_order_id_cache(cls) -> None:
         for oid in cls.all_order_ids():
             order = cls.from_id(oid)
-            broker_id = order[ORDER_ID_FIELD]
-            cls._ORDER_MAP[broker_id] = oid
-            cls._ORDER_MAP[str(broker_id)] = oid
+            secondary_id = order[ORDER_ID_FIELD]
+            cls._ORDER_MAP[secondary_id] = oid
+            cls._ORDER_MAP[str(secondary_id)] = oid
 
     @classmethod
     def delete_order_id(cls, order_id: Any) -> None:
@@ -305,14 +302,14 @@ class OrderTree(JsonCache):
         # Read identifiers before unlinking. A missing file reloads as an
         # empty document, and the id would be gone.
         id_ = order.get(ID, order._id)
-        broker_id = order.get(ORDER_ID_FIELD)
+        secondary_id = order.get(ORDER_ID_FIELD)
         path = order.filename
         try:
             os.remove(path)
         except FileNotFoundError:
             pass
         cls._CACHE.pop(id_, None)
-        cls._ORDER_MAP.pop(broker_id, None)
+        cls._ORDER_MAP.pop(secondary_id, None)
         cls._ORDER_MAP.pop(id_, None)
 
     @classmethod
@@ -358,11 +355,11 @@ class OrderTree(JsonCache):
         price_prec: int = 2,
         complete: bool = False,
     ) -> "OrderTree":
-        """Combine same-side orders into the first one.
+        """Fold later records into the first when they share its side field.
 
-        ``target_price`` becomes the size-weighted average. ``amount`` is the
-        sum of sizes. The first id is kept. The others are deleted, after an
-        optional move into ``completed/``.
+        The price field becomes the size-weighted average. The size field is
+        the sum. The first id is kept. The others are deleted, after an
+        optional move into a side directory.
         """
         if len(order_list) == 1:
             return order_list[0]
@@ -433,7 +430,7 @@ class OrderTree(JsonCache):
 
     @property
     def order_id(self) -> Any:
-        """Broker id field. ``getattr(order, "order_id")`` is how the monitor scans."""
+        """Secondary id stored on the record, when one was set."""
         return self.get(ORDER_ID_FIELD)
 
     def set_order_id(self, order_id: Any) -> None:

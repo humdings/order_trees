@@ -4,11 +4,10 @@
 default), as a ``FileMap``. Assigning ``book["id"] = {...}`` replaces that
 file. Deleting the key removes the file.
 
-Dotfiles, the lock file, temp files, and subdirectories are not keys. A
-``completed/`` folder sitting next to order files is ignored.
+Dotfiles, the lock file, temp files, and subdirectories are not keys.
 
 ``batch`` holds the directory lock and writes each touched file once on a
-clean exit. Field-level batches on one order are ``with book[key].batch()``.
+clean exit. Field-level batches on one file are ``with folder[key].batch()``.
 """
 
 from __future__ import annotations

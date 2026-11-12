@@ -28,13 +28,13 @@ def test_set_get_delete_round_trip(tmp_path: Path) -> None:
     mapping = FileMap(path)
     assert len(mapping) == 0
     assert not path.exists()
-    mapping["symbol"] = "AAPL"
-    mapping["amount"] = 3
-    assert json.loads(path.read_text()) == {"symbol": "AAPL", "amount": 3}
-    assert mapping["symbol"] == "AAPL"
-    del mapping["amount"]
-    assert "amount" not in mapping
-    assert json.loads(path.read_text()) == {"symbol": "AAPL"}
+    mapping["name"] = "alpha"
+    mapping["count"] = 3
+    assert json.loads(path.read_text()) == {"name": "alpha", "count": 3}
+    assert mapping["name"] == "alpha"
+    del mapping["count"]
+    assert "count" not in mapping
+    assert json.loads(path.read_text()) == {"name": "alpha"}
     mapping.close()
 
 
