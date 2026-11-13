@@ -38,6 +38,10 @@ Conflict policy is overlay. On a partial write, if the file changed since the la
 
 Nested dicts and lists are proxies. `m["child"]["k"] = 1` writes the file. `write_through=False` returns a copy instead, and that copy is stored only if you assign it back.
 
+## When a file disappears
+
+Agreed rules for a removed or renamed file are in [the file disappearance protocol](docs/protocol.md). This tree does not implement that protocol yet.
+
 ## Older constructors
 
 `JsonCache(data, directory)` is the older per-file constructor. A directory factory returns a subclass bound to one path. Id generation stays in those constructors. `use_cache=True` keeps the object and still reloads when the file changes. `use_cache=False` builds a new object on every `from_id` and parses on every lookup.
