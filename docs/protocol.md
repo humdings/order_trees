@@ -65,9 +65,11 @@ Tests, not implemented:
 While the path is not a file, these raise `Gone` and leave the path absent:
 
 - `__setitem__`, `__delitem__`, `update`, `pop`, `clear`, `setdefault`, `replace`, `modify`
-- `batch` (raised when the block is entered)
+- `batch`, when the path is already absent as the block is entered
 - a nested proxy write
 - `write_memory`
+
+A file that was loaded for `batch` and then edited or removed before commit is rule 7. That commit does not recreate the file.
 
 The explicit recreate on a file map is `FileMap.create(document)`:
 
@@ -136,6 +138,23 @@ Tests, not implemented:
 - `tests/test_dirmap.py::test_create_in_one_timestamp_tick_adds_the_key` — the same setup, then add `b.json` before the directory signature changes; iteration includes `"b"`.
 - `tests/test_dirmap.py::test_contains_stats_the_file` — `"a" in records` is false when `a.json` is absent even if a previous scan cached `"a"`.
 
+### 7. A batch commit loses to an outside edit
+
+This race should be rare. Two library users already exclude each other with the file lock. The case that remains is an outside program, treated as a person editing or removing the file, changing the path after `batch` has loaded it.
+
+`batch` records the inode and `mtime_ns` from that load. On commit, if the inode differs, `mtime_ns` differs, or the file is gone, raise `Conflict` (`order_trees.errors.Conflict`) and do not write. The outside version wins:
+
+- The bytes on disk are left as they are. A removal stays a removal. The batch does not merge its keys onto the new file and does not recreate a deleted file.
+- Edits made inside the block are discarded. After the exception, a read follows the disk: the outside document, or `Gone` if the path is absent.
+
+Item assignment outside `batch` is not this rule.
+
+`DirMap.batch` uses the same check for every file it would write. If any of those files conflicts, the commit raises `Conflict` before writing any of them.
+
+Test, not implemented:
+
+- `tests/test_filemap.py::test_batch_commit_raises_when_the_file_changed` — inside `batch`, an outside overwrite changes inode or `mtime_ns`, and an outside `rm` removes the file. Commit raises `Conflict`. The overwrite is still the file's bytes. The removed path is still absent.
+
 ## Open proposals
 
 David has not decided these. They are not part of the agreed protocol above.
@@ -145,12 +164,6 @@ David has not decided these. They are not part of the agreed protocol above.
 Optional `DirMap(..., on_remove=fn)`. `fn(key)` runs when a membership check sees that a key from the previous check is gone. No callback is the default. The callback does not run for a key this map never observed. Failures in `fn` propagate and do not change membership.
 
 Test, not implemented: `tests/test_dirmap.py::test_on_remove_fires_once_per_disappeared_key`.
-
-### Batch commit conflicts
-
-`batch` records the inode and `mtime_ns` of the file it loaded. On commit, if either differs, raise `Conflict` (a new `order_trees.errors` exception) and do not write. The in-memory edits from that block are discarded. This replaces the overlay merge for `batch` only. Item assignment outside `batch` can keep today's overlay until that is decided separately.
-
-Test, not implemented: `tests/test_filemap.py::test_batch_commit_raises_when_the_file_changed`.
 
 ### Readers never turn a bad file into `{}`
 
