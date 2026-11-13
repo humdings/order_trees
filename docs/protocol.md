@@ -182,6 +182,25 @@ Tests, not implemented:
 - `tests/test_filemap.py::test_zero_byte_file_raises_immediately` — a zero-length file raises `EmptyFileError` on the first read, with no retry. The error is a `DocumentError` and is not `Gone`. The document is not `{}`. The directory key is still a member.
 - `tests/test_filemap.py::test_empty_map_is_written_as_empty_object` — clearing a document or writing `{}` stores `{}`, not a zero-length file.
 
+### 10. `pop` on a directory key returns a dict, and `pop` of a field writes
+
+`DirMap.pop(key)` deletes that file, drops `key` from the map, and returns a plain dict copy of the document. The copy is not a `FileMap`. Editing it does not write. A `FileMap` already held for `key` then follows rule 2: `document` is `None` and reads raise `Gone`. A missing key raises `KeyError`. `pop(key, default)` returns `default` and does not change the disk.
+
+`FileMap.pop(field)` is an ordinary mapping pop on a live document. It removes `field`, writes the remaining document with the atomic rename from rule 8, and returns the value that was stored. A missing field raises `KeyError` unless a default is passed. If the path is already gone, `pop` raises `Gone` and does not create the file.
+
+Tests, not implemented:
+
+- `tests/test_dirmap.py::test_pop_returns_a_dict_copy_and_drops_the_key` — `pop("a")` returns `{"label": "alpha", "count": 3}` as a `dict`, the file is gone, `"a"` is not a member, and a held file map for `"a"` has `document is None`.
+- `tests/test_filemap.py::test_pop_field_writes_the_document_and_returns_the_value` — `pop("count")` returns `3`, the file is the atomic-rename result without `count`, and `pop` on a gone map raises `Gone` without creating the path.
+
+### 11. Legacy cache objects follow the gone rule
+
+Per-file objects from the legacy constructors follow rules 2 and 3 for both `use_cache=True` and `use_cache=False`. A missing file makes reads raise `Gone` and `document` return `None`. Item assignment does not recreate the file. `dump()` does not recreate it either. Recreate goes through `create` on the underlying file map, or through a directory-map assignment when the caller has one.
+
+`from_id` on an id whose file is absent raises `FileNotFoundError` when it has to open the path. It does not construct an empty document. With `use_cache=True`, a later `from_id` for an object already cached returns that object, which is gone.
+
+Test, not implemented: `tests/test_compat.py::test_legacy_object_goes_gone_for_both_cache_settings`.
+
 ## Open proposals
 
 David has not decided these. They are not part of the agreed protocol above.
@@ -191,20 +210,6 @@ David has not decided these. They are not part of the agreed protocol above.
 Optional `DirMap(..., on_remove=fn)`. `fn(key)` runs when a membership check sees that a key from the previous check is gone. No callback is the default. The callback does not run for a key this map never observed. Failures in `fn` propagate and do not change membership.
 
 Test, not implemented: `tests/test_dirmap.py::test_on_remove_fires_once_per_disappeared_key`.
-
-### `pop` returns a plain dict
-
-`DirMap.pop(key)` removes the file and returns a plain dict copy of the document from before the delete. It does not return the file map. The file map previously held for that key is gone.
-
-Test, not implemented: `tests/test_dirmap.py::test_pop_returns_a_dict_copy_and_drops_the_key`.
-
-### Legacy cache objects follow the gone rule
-
-Per-file objects from the legacy constructors follow rules 2 and 3 for both `use_cache=True` and `use_cache=False`. A missing file makes reads raise `Gone` and `document` return `None`. Item assignment does not recreate the file. `dump()` does not recreate it either. Recreate goes through `create` on the underlying file map, or through a directory-map assignment when the caller has one.
-
-`from_id` on an id whose file is absent raises `FileNotFoundError` when it has to open the path. It does not construct an empty document. With `use_cache=True`, a later `from_id` for an object already cached returns that object, which is gone.
-
-Test, not implemented: `tests/test_compat.py::test_legacy_object_goes_gone_for_both_cache_settings`.
 
 ### Locks coordinate library users only
 
