@@ -170,11 +170,19 @@ class JsonCache(MutableMapping[str, Any]):
 
     @classmethod
     def get_or_create(cls, id_hash: str) -> "JsonCache":
+        """Return the record for *id_hash*, creating ``{_id: id_hash}`` if absent.
+
+        This is an explicit create. A path that cannot be stat'd raises that
+        ``OSError`` (for example ``PermissionError``). It is not ``Gone``.
+        """
         try:
             return cls.from_id(id_hash)
         except FileNotFoundError:
             cache = cls(data={ID: id_hash})
-            cache.dump()
+            try:
+                cache._map.create({ID: id_hash})
+            except FileExistsError:
+                return cls.from_id(id_hash)
             return cache
 
 

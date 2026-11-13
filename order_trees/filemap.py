@@ -45,7 +45,7 @@ from order_trees.codec import Codec, JsonCodec
 from order_trees.errors import Conflict, DocumentError, EmptyFileError, Gone
 from order_trees.locking import FcntlLock, lock_path_for
 from order_trees.proxy import wrap
-from order_trees.reload import file_signature, make_reload
+from order_trees.reload import file_signature, is_directory, is_regular_file, make_reload
 from order_trees.values import plain
 
 _MISSING = object()
@@ -169,7 +169,7 @@ class FileMap(MutableMapping[str, Any]):
     @property
     def exists(self) -> bool:
         """True when the path is a regular file. Stats on every read."""
-        return self._path.is_file()
+        return is_regular_file(self._path)
 
     @property
     def gone(self) -> bool:
@@ -179,7 +179,7 @@ class FileMap(MutableMapping[str, Any]):
     @property
     def document(self) -> Optional[dict[str, Any]]:
         """Plain copy of the document, or ``None`` when the path is gone."""
-        if not self._path.is_file():
+        if not is_regular_file(self._path):
             return None
         return self.to_dict()
 
@@ -189,7 +189,7 @@ class FileMap(MutableMapping[str, Any]):
         return copy.deepcopy(self._data)
 
     def __bool__(self) -> bool:
-        if not self._path.is_file():
+        if not is_regular_file(self._path):
             return False
         self._prepare_read()
         return bool(self._data)
@@ -240,12 +240,12 @@ class FileMap(MutableMapping[str, Any]):
         return key in self._data
 
     def get(self, key: str, default: Any = None) -> Any:
-        if not self._path.is_file():
+        if not is_regular_file(self._path):
             raise Gone(str(self._path))
         return MutableMapping.get(self, key, default)
 
     def pop(self, key: str, default: Any = _MISSING) -> Any:
-        if not self._path.is_file():
+        if not is_regular_file(self._path):
             raise Gone(str(self._path))
         if default is _MISSING:
             return MutableMapping.pop(self, key)
@@ -405,7 +405,7 @@ class FileMap(MutableMapping[str, Any]):
         bytes that hit disk. A missing file is not recreated.
         """
         with self._lock:
-            if not self._path.is_file():
+            if not is_regular_file(self._path):
                 if not self._pending_first_dump:
                     self._refuse_if_absent()
                 self._overwrite = True
@@ -430,9 +430,9 @@ class FileMap(MutableMapping[str, Any]):
         """
         payload = _as_document(document)
         with self._lock:
-            if self._path.is_dir():
+            if is_directory(self._path):
                 raise IsADirectoryError(self._path)
-            if self._path.is_file():
+            if is_regular_file(self._path):
                 raise FileExistsError(self._path)
             self._data = payload
             self._overlay.clear()
@@ -525,13 +525,13 @@ class FileMap(MutableMapping[str, Any]):
         self._reload_if_needed()
         if self._batch_depth:
             return
-        if not self._path.is_file():
+        if not is_regular_file(self._path):
             raise Gone(str(self._path))
 
     def _refuse_if_absent(self) -> None:
-        if self._path.is_dir():
+        if is_directory(self._path):
             raise IsADirectoryError(self._path)
-        if not self._path.is_file():
+        if not is_regular_file(self._path):
             raise Gone(str(self._path))
 
     def _remember_batch_stamp(self) -> None:
