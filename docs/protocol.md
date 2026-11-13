@@ -1,6 +1,6 @@
 # File disappearance protocol
 
-This is the behavior for a file that is no longer at the path a mapping is using. It is the agreed protocol. Nothing in this tree implements it yet.
+This is the behavior when a mapped file is removed, renamed, or replaced at the same path. It is the agreed protocol. Nothing in this tree implements it yet.
 
 Examples use a directory mapping `records` and documents shaped like `{"label": "alpha", "count": 3}`. `a.json` is the file for key `"a"`.
 
@@ -101,7 +101,24 @@ Tests, not implemented:
 - `tests/test_dirmap.py::test_rename_drops_old_key_and_adds_new_key` — after `mv a.json b.json`, `"a"` is not a member, `"b"` is, and `records["b"]["label"]` is the value that was in `a`.
 - `tests/test_filemap.py::test_held_map_goes_gone_on_rename` — the object previously returned for `"a"` has `document is None` and raises `Gone` on read. It is not `records["b"]`.
 
-### 5. Membership matches the disk on every check
+### 5. A replacement at the same path loads the new bytes
+
+If `a.json` is replaced and the path is still `a.json`, the held file map for `"a"` loads the new document on its next read. That includes a shell overwrite and `mv other.json records/a.json` (the inode may change).
+
+- `"a"` stays a member. The held object stays bound to `a.json`. It does not go gone.
+- `held["label"]`, iteration, and `document` are the bytes now in that file.
+- A nested proxy reads those bytes on its next use.
+- There is no generation counter.
+
+This is not rule 4. `mv a.json b.json` removes `a`. `mv other.json a.json` keeps `a` and changes its contents.
+
+Tests, not implemented:
+
+- `tests/test_filemap.py::test_overwrite_reloads_held_map` — overwrite `a.json` with a new document; the same held object reads the new `label` under `reload="stat"` and `reload="inotify"`. `"a"` is still a member.
+- `tests/test_filemap.py::test_mv_onto_path_reloads_held_map` — `mv` a different file onto `a.json`; the held object reads that file's document, including when the inode changes.
+- `tests/test_dirmap.py::test_same_path_replacement_keeps_the_key` — after either replacement, `"a" in records` is true and `records["a"]` is the held object.
+
+### 6. Membership matches the disk on every check
 
 A directory signature of `(mtime_ns, ctime_ns, size, inode)` is not enough to decide the key set. On some filesystems that tuple does not move when a child is added or removed inside one timestamp tick, and a cache keyed only on it lags the disk.
 
@@ -128,12 +145,6 @@ David has not decided these. They are not part of the agreed protocol above.
 Optional `DirMap(..., on_remove=fn)`. `fn(key)` runs when a membership check sees that a key from the previous check is gone. No callback is the default. The callback does not run for a key this map never observed. Failures in `fn` propagate and do not change membership.
 
 Test, not implemented: `tests/test_dirmap.py::test_on_remove_fires_once_per_disappeared_key`.
-
-### Inode change is a new document
-
-If the path still exists but the inode differs from the inode last loaded, the file map loads that file as a new document and increments `FileMap.generation`, starting at 0 for the first successful load. Callers who held a nested proxy refresh it on the next use. A same-inode rewrite keeps the generation.
-
-Test, not implemented: `tests/test_filemap.py::test_inode_change_bumps_generation_and_reloads`.
 
 ### Batch commit conflicts
 
