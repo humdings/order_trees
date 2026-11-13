@@ -155,6 +155,19 @@ Test, not implemented:
 
 - `tests/test_filemap.py::test_batch_commit_raises_when_the_file_changed` — inside `batch`, an outside overwrite changes inode or `mtime_ns`, and an outside `rm` removes the file. Commit raises `Conflict`. The overwrite is still the file's bytes. The removed path is still absent.
 
+### 8. Writes are atomic, and a bad read is an error
+
+A library write goes to a temp file in the same directory, fsyncs it, renames it over the target, then fsyncs the directory. A crash before the rename leaves the previous file in place.
+
+Documents are small. A reader that sees partial or invalid JSON retries a few times, with a short pause between tries, so it can catch the file just as a rename lands. If the bytes are still not a JSON object after those tries, the read raises `DocumentError`. It does not install `{}` or any other stand-in document.
+
+A missing path is rule 2 (`Gone`), not an invalid document and not `{}`.
+
+Tests, not implemented:
+
+- `tests/test_filemap.py::test_write_is_temp_file_then_atomic_rename` — a write renames a temp file in the same directory over the target, and fsyncs the file before the rename and the directory after it.
+- `tests/test_filemap.py::test_invalid_json_raises_after_retries` — a partial or invalid payload still fails after the short retries, the error is `DocumentError`, and the map's document is not `{}`.
+
 ## Open proposals
 
 David has not decided these. They are not part of the agreed protocol above.
@@ -165,14 +178,11 @@ Optional `DirMap(..., on_remove=fn)`. `fn(key)` runs when a membership check see
 
 Test, not implemented: `tests/test_dirmap.py::test_on_remove_fires_once_per_disappeared_key`.
 
-### Readers never turn a bad file into `{}`
+### An empty file is not a missing file
 
-Writes stay temp file, fsync, rename, directory fsync. A reader that sees a short or invalid document retries a small fixed number of times. If it is still invalid, raise `DocumentError`. A missing file is `Gone`, never `{}`. These two are different:
+A path that exists and is empty, or that encodes `{}`, is a live empty document: `gone` is false and `document == {}`. A path that is absent is `Gone` and `document` is `None`. Readers do not use one of these as a stand-in for the other.
 
-- path absent: `gone` is true, `document` is `None`
-- path exists and is empty, or is the encoding of `{}`: a live empty document, `gone` is false, `document == {}`
-
-Test, not implemented: `tests/test_filemap.py::test_missing_file_is_gone_and_empty_file_is_empty_document` and `tests/test_filemap.py::test_invalid_json_raises_after_retries`.
+Test, not implemented: `tests/test_filemap.py::test_missing_file_is_gone_and_empty_file_is_empty_document`.
 
 ### `pop` returns a plain dict
 
