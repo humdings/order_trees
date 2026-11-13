@@ -28,18 +28,6 @@ Nested dicts and lists
 By default ``m["child"]["k"] = 1`` writes through a proxy. Set
 ``write_through=False`` to get a deep copy instead; persisting that copy
 requires assigning it back to the key.
-
-Missing file
-------------
-A path that has never been loaded reads as an empty document. After a
-document has been loaded, deleting the file does not clear it. Lookups,
-containment, length, and iteration keep that last document, and the absence
-is remembered so the path is not parsed as ``{}``.
-
-A write while the path is absent recreates the file from the memory image,
-so keys this write did not touch are still stored. ``replace`` still
-overwrites the whole document. If a file appears at the path again, the
-next lookup loads that file.
 """
 
 from __future__ import annotations
@@ -121,9 +109,6 @@ class FileMap(MutableMapping[str, Any]):
     write_through:
         When true (the default), nested dicts and lists are proxies that
         write on mutation. When false, lookups of those values return copies.
-
-    A file removed after a successful load leaves this mapping holding the
-    last document. The next write creates the file again from that document.
     """
 
     def __init__(
@@ -141,9 +126,6 @@ class FileMap(MutableMapping[str, Any]):
         self._lock = lock if lock is not None else FcntlLock(lock_path_for(self._path))
         self._write_through = write_through
         self._data: dict[str, Any] = {}
-        # Last document from a load or a successful write. A missing file
-        # restores this instead of becoming {}.
-        self._retained: dict[str, Any] = self._data
         self._overlay: dict[str, tuple[Any, ...]] = {}
         self._overwrite = False
         self._base_sig: Any = None
@@ -346,7 +328,6 @@ class FileMap(MutableMapping[str, Any]):
         """
         document = _as_document(data)
         self._data = document
-        self._retained = document
         self._overlay.clear()
         self._overwrite = False
         self._loaded = True
@@ -448,12 +429,7 @@ class FileMap(MutableMapping[str, Any]):
                 blob = self._path.read_bytes()
             except FileNotFoundError:
                 if file_signature(self._path) is None:
-                    # Never loaded: this is an empty document. Already loaded:
-                    # the file was removed, so keep the last document.
-                    if self._loaded:
-                        self._install(self._retained, None)
-                    else:
-                        self._install({}, None)
+                    self._install({}, None)
                     return
                 continue
             signature_after = file_signature(self._path)
@@ -474,7 +450,6 @@ class FileMap(MutableMapping[str, Any]):
 
     def _install(self, data: dict[str, Any], signature: Any) -> None:
         self._data = data
-        self._retained = data
         self._base_sig = signature
         self._overlay.clear()
         self._overwrite = False
@@ -531,12 +506,10 @@ class FileMap(MutableMapping[str, Any]):
         self._put(top, cloned)
 
     def _read_document(self) -> dict[str, Any]:
-        """Read the file. ``FileNotFoundError`` means the path is absent.
-
-        Callers must not treat that as an empty document: an absent file
-        has nothing to merge, and the memory image is what gets written.
-        """
-        blob = self._path.read_bytes()
+        try:
+            blob = self._path.read_bytes()
+        except FileNotFoundError:
+            return {}
         if blob == b"":
             return {}
         data = self._codec.load(blob)
@@ -561,29 +534,18 @@ class FileMap(MutableMapping[str, Any]):
                     # collide with an older observation when a clock is coarse
                     # and inodes are reused, so a writer must not trust them.
                     signature = file_signature(self._path)
-                    if signature is None:
-                        # Nothing on disk to overlay. Recreate the file from
-                        # the memory image so untouched keys are kept.
-                        if file_signature(self._path) is not None:
-                            continue
-                        document = dict(self._data)
-                    else:
-                        try:
-                            document = self._read_document()
-                        except FileNotFoundError:
-                            continue
-                        if file_signature(self._path) != signature:
-                            continue
-                        for key, op in self._overlay.items():
-                            if op[0] == "set":
-                                document[key] = op[1]
-                            else:
-                                document.pop(key, None)
+                    document = self._read_document()
+                    if file_signature(self._path) != signature:
+                        continue
+                    for key, op in self._overlay.items():
+                        if op[0] == "set":
+                            document[key] = op[1]
+                        else:
+                            document.pop(key, None)
                 payload = self._codec.dump(document)
                 atomic_write(self._path, payload)
                 new_sig = file_signature(self._path)
                 self._data = document
-                self._retained = document
                 self._base_sig = new_sig
                 self._overlay.clear()
                 self._overwrite = False

@@ -38,14 +38,6 @@ Conflict policy is overlay. On a partial write, if the file changed since the la
 
 Nested dicts and lists are proxies. `m["child"]["k"] = 1` writes the file. `write_through=False` returns a copy instead, and that copy is stored only if you assign it back.
 
-## When the file is removed
-
-A path that has not been loaded yet reads as an empty document. After a document has been loaded, deleting the file leaves that document in memory. Lookups and iteration still see it. A missing file is not read back as `{}`.
-
-The next write creates the file again from the in-memory document, including keys the write did not change. `replace()` still overwrites the whole document. If a new file appears at the same path, the next lookup loads it.
-
-A directory mapping works the same way. Deleting a key removes the file. A document already held from that key keeps its fields, and writing through it creates the file again.
-
 ## Older constructors
 
 `JsonCache(data, directory)` is the older per-file constructor. A directory factory returns a subclass bound to one path. Id generation stays in those constructors. `use_cache=True` keeps the object and still reloads when the file changes. `use_cache=False` builds a new object on every `from_id` and parses on every lookup.

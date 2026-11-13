@@ -8,10 +8,6 @@ Dotfiles, the lock file, temp files, and subdirectories are not keys.
 
 ``batch`` holds the directory lock and writes each touched file once on a
 clean exit. Field-level batches on one file are ``with folder[key].batch()``.
-
-Deleting a key removes its file. A document already returned for that key
-keeps the last loaded fields. Writing through that document creates the
-file again.
 """
 
 from __future__ import annotations
@@ -48,10 +44,6 @@ class DirMap(MutableMapping[str, FileMap]):
     fcntl lock per file, so two writers updating different keys do not block
     each other. ``batch`` also takes a directory lock so two batches cannot
     interleave.
-
-    A document this mapping has already handed out keeps its fields after
-    ``del`` removes the file. A later assignment on that document creates
-    the file again, and the key shows up on the next lookup.
     """
 
     def __init__(

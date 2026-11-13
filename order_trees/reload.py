@@ -136,7 +136,6 @@ class InotifyReload:
     The watch is on the parent directory so an atomic rename is visible.
     An overflow, or a missing inotify, is not swallowed: overflow falls
     back to a stat, and a failed ``inotify_init`` raises ``OSError``.
-    After ``close()``, lookups use stat so a held document stays readable.
     """
 
     def __init__(self, path: Path) -> None:
@@ -160,13 +159,6 @@ class InotifyReload:
         self._fd = fd
 
     def needs_reload(self) -> bool:
-        if self._fd < 0:
-            # The watch was closed (a directory mapping drops it when the
-            # key is removed). Keep answering from stat so a held document
-            # can still be read.
-            if not self._ready:
-                return True
-            return self._stat.needs_reload()
         if not self._ready or self._force:
             self._force = False
             return True
@@ -176,8 +168,7 @@ class InotifyReload:
         return self._stat.needs_reload()
 
     def observe(self, signature: Any) -> None:
-        if self._fd >= 0:
-            self._drain()
+        self._drain()
         current = file_signature(self.path)
         if current != signature:
             # An event arrived as we wrote, or a writer that ignores the
@@ -196,8 +187,6 @@ class InotifyReload:
 
     def _drain(self) -> str:
         """Return ``none``, ``hit``, or ``overflow`` after emptying the queue."""
-        if self._fd < 0:
-            return "overflow"
         hit = False
         overflow = False
         while True:
