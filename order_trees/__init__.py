@@ -26,7 +26,14 @@ from order_trees.constants import (
     TARGET_PRICE,
 )
 from order_trees.dirmap import DirMap
-from order_trees.errors import CodecError, DocumentError, OrderTreesError
+from order_trees.errors import (
+    CodecError,
+    Conflict,
+    DocumentError,
+    EmptyFileError,
+    Gone,
+    OrderTreesError,
+)
 from order_trees.factory import (
     create_cache_for_directory,
     ensure_directory,
@@ -54,7 +61,10 @@ __all__ = [
     "JsonCodec",
     "RobustJSONEncoder",
     "CodecError",
+    "Conflict",
     "DocumentError",
+    "EmptyFileError",
+    "Gone",
     "OrderTreesError",
     "FcntlLock",
     "NullLock",

@@ -1,6 +1,6 @@
 # File disappearance protocol
 
-This is the behavior when a mapped file is removed, renamed, or replaced at the same path. Every item below is agreed. Nothing in this tree implements it yet.
+This is the behavior when a mapped file is removed, renamed, or replaced at the same path. Every item below is agreed. The library follows it.
 
 Examples use a directory mapping `records` and documents shaped like `{"label": "alpha", "count": 3}`. `a.json` is the file for key `"a"`.
 

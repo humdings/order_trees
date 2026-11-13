@@ -12,7 +12,7 @@ Edits of ``obj.data`` are not write-through; call ``dump()`` or leave the
 ``with`` block. Item assignment writes immediately.
 
 Moving a record into a side directory leaves ``filename`` on the original
-path. A later ``dump()`` creates that file again.
+path. ``dump()`` does not recreate a missing file.
 """
 
 from __future__ import annotations
@@ -88,8 +88,13 @@ class JsonCache(MutableMapping[str, Any]):
         Item assignment does not go through this dict; it writes on its own.
         Do not keep the return value across a reload.
         """
-        self._map._reload_if_needed()
+        self._map._prepare_read()
         return self._map._data
+
+    @property
+    def document(self) -> Optional[dict[str, Any]]:
+        """Plain copy of the document, or ``None`` when the file is gone."""
+        return self._map.document
 
     @property
     def filename(self) -> str:
@@ -420,8 +425,7 @@ class OrderTree(JsonCache):
             shutil.move(src, dest)
         except FileNotFoundError:
             pass
-        # filename stays in the active directory. A later dump() creates that
-        # file again, which is what the old dump() did after the move.
+        # filename stays in the active directory. dump() does not recreate it.
         self._map.seed(kept, write=False)
         self._ORDER_MAP.pop(oid, None)
         self._ORDER_MAP.pop(id_, None)

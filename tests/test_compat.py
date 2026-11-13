@@ -6,7 +6,10 @@ import inspect
 import json
 from pathlib import Path
 
+import pytest
+
 from order_trees import create_cache_for_directory, order_book_for_directory
+from order_trees.errors import Gone
 from order_trees.legacy import JsonCache, OrderTree
 
 
@@ -68,3 +71,34 @@ def test_missing_id_is_generated(tmp_path: Path) -> None:
     assert made._id
     assert (tmp_path / "meta" / f"{made._id}.json").is_file()
     assert cache_cls.from_id(made._id)["label"] == "gamma"
+
+
+@pytest.mark.parametrize("use_cache", [True, False])
+def test_legacy_object_goes_gone_for_both_cache_settings(
+    tmp_path: Path, use_cache: bool
+) -> None:
+    kind = create_cache_for_directory(tmp_path / "meta", use_cache=use_cache)
+    made = kind(data={"label": "alpha"})
+    ident = made._id
+    cached = kind.from_id(ident)
+    path = Path(made.filename)
+    path.unlink()
+    assert made.document is None
+    with pytest.raises(Gone):
+        made["label"]
+    with pytest.raises(Gone):
+        made["count"] = 1
+    with pytest.raises(Gone):
+        made.dump()
+    if use_cache:
+        again = kind.from_id(ident)
+        assert again is cached
+        assert again.document is None
+        with pytest.raises(Gone):
+            again["label"]
+    else:
+        with pytest.raises(FileNotFoundError):
+            kind.from_id(ident)
+    made._map.create({"_id": ident, "label": "beta"})
+    assert made["label"] == "beta"
+    assert made.document == {"_id": ident, "label": "beta"}

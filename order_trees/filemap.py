@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import copy
 import os
+import time
 from collections.abc import Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -41,7 +42,7 @@ from typing import Any, Callable, Optional, Union
 
 from order_trees.atomic import atomic_write
 from order_trees.codec import Codec, JsonCodec
-from order_trees.errors import DocumentError
+from order_trees.errors import Conflict, DocumentError, EmptyFileError, Gone
 from order_trees.locking import FcntlLock, lock_path_for
 from order_trees.proxy import wrap
 from order_trees.reload import file_signature, make_reload
@@ -136,6 +137,10 @@ class FileMap(MutableMapping[str, Any]):
         self._snapshot: Optional[dict[str, Any]] = None
         self._snapshot_overlay: dict[str, tuple[Any, ...]] = {}
         self._snapshot_overwrite = False
+        self._creating = False
+        self._pending_first_dump = False
+        self._batch_mtime: Optional[int] = None
+        self._batch_ino: Optional[int] = None
 
     @property
     def path(self) -> Path:
@@ -161,13 +166,36 @@ class FileMap(MutableMapping[str, Any]):
         self._force = True
         self._reload_if_needed()
 
+    @property
+    def exists(self) -> bool:
+        """True when the path is a regular file. Stats on every read."""
+        return self._path.is_file()
+
+    @property
+    def gone(self) -> bool:
+        """True when the path is not a regular file."""
+        return not self.exists
+
+    @property
+    def document(self) -> Optional[dict[str, Any]]:
+        """Plain copy of the document, or ``None`` when the path is gone."""
+        if not self._path.is_file():
+            return None
+        return self.to_dict()
+
     def to_dict(self) -> dict[str, Any]:
         """Deep copy of the current document."""
-        self._reload_if_needed()
+        self._prepare_read()
         return copy.deepcopy(self._data)
 
+    def __bool__(self) -> bool:
+        if not self._path.is_file():
+            return False
+        self._prepare_read()
+        return bool(self._data)
+
     def __getitem__(self, key: str) -> Any:
-        self._reload_if_needed()
+        self._prepare_read()
         try:
             value = self._data[key]
         except KeyError:
@@ -184,6 +212,7 @@ class FileMap(MutableMapping[str, Any]):
             self._put(key, value)
             return
         with self._lock:
+            self._refuse_if_absent()
             self._load()
             self._put(key, value)
             self._write_locked()
@@ -193,21 +222,34 @@ class FileMap(MutableMapping[str, Any]):
             self._remove(key)
             return
         with self._lock:
+            self._refuse_if_absent()
             self._load()
             self._remove(key)
             self._write_locked()
 
     def __iter__(self) -> Iterator[str]:
-        self._reload_if_needed()
+        self._prepare_read()
         return iter(list(self._data))
 
     def __len__(self) -> int:
-        self._reload_if_needed()
+        self._prepare_read()
         return len(self._data)
 
     def __contains__(self, key: object) -> bool:
-        self._reload_if_needed()
+        self._prepare_read()
         return key in self._data
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if not self._path.is_file():
+            raise Gone(str(self._path))
+        return MutableMapping.get(self, key, default)
+
+    def pop(self, key: str, default: Any = _MISSING) -> Any:
+        if not self._path.is_file():
+            raise Gone(str(self._path))
+        if default is _MISSING:
+            return MutableMapping.pop(self, key)
+        return MutableMapping.pop(self, key, default)
 
     def __repr__(self) -> str:
         self._reload_if_needed()
@@ -251,6 +293,7 @@ class FileMap(MutableMapping[str, Any]):
             self._overlay.clear()
             return
         with self._lock:
+            self._refuse_if_absent()
             self._data = document
             self._overwrite = True
             self._overlay.clear()
@@ -297,9 +340,11 @@ class FileMap(MutableMapping[str, Any]):
             return
         self._lock.__enter__()
         try:
+            self._refuse_if_absent()
             # Parse under the lock. A stat collision must not feed modify()
             # a stale value.
             self._load()
+            self._remember_batch_stamp()
             self._batch_depth = 1
             snapshot = dict(self._data)
             snapshot_overlay = dict(self._overlay)
@@ -312,8 +357,15 @@ class FileMap(MutableMapping[str, Any]):
                 self._overwrite = snapshot_overwrite
                 raise
             else:
-                if self._overlay or self._overwrite:
-                    self._write_locked()
+                try:
+                    if self._overlay or self._overwrite:
+                        self._write_locked()
+                except Conflict:
+                    self._data = snapshot
+                    self._overlay = snapshot_overlay
+                    self._overwrite = snapshot_overwrite
+                    self._force = True
+                    raise
             finally:
                 self._batch_depth = 0
         finally:
@@ -334,9 +386,15 @@ class FileMap(MutableMapping[str, Any]):
         if write:
             with self._lock:
                 self._overwrite = True
-                self._write_locked()
+                self._creating = True
+                try:
+                    self._write_locked()
+                finally:
+                    self._creating = False
+            self._pending_first_dump = False
             return
         signature = file_signature(self._path)
+        self._pending_first_dump = signature is None
         self._base_sig = signature
         self._reload.observe(signature)
 
@@ -344,12 +402,46 @@ class FileMap(MutableMapping[str, Any]):
         """Write the current memory image over the file, without merging.
 
         Legacy ``dump()`` uses this so in-place edits of ``.data`` are the
-        bytes that hit disk.
+        bytes that hit disk. A missing file is not recreated.
         """
         with self._lock:
+            if not self._path.is_file():
+                if not self._pending_first_dump:
+                    self._refuse_if_absent()
+                self._overwrite = True
+                self._overlay.clear()
+                self._creating = True
+                try:
+                    self._write_locked()
+                finally:
+                    self._creating = False
+                self._pending_first_dump = False
+                return
+            self._pending_first_dump = False
             self._overwrite = True
             self._overlay.clear()
             self._write_locked()
+
+    def create(self, document: Mapping[Any, Any]) -> None:
+        """Write *document* only when the path is absent.
+
+        This is the explicit recreate. If the path is already a file,
+        raise ``FileExistsError`` and leave it unchanged.
+        """
+        payload = _as_document(document)
+        with self._lock:
+            if self._path.is_dir():
+                raise IsADirectoryError(self._path)
+            if self._path.is_file():
+                raise FileExistsError(self._path)
+            self._data = payload
+            self._overlay.clear()
+            self._overwrite = True
+            self._creating = True
+            try:
+                self._write_locked()
+            finally:
+                self._creating = False
 
     def begin_deferred(self) -> None:
         """Start deferring writes without taking this file's lock.
@@ -361,6 +453,7 @@ class FileMap(MutableMapping[str, Any]):
         if self._external_batch or self._batch_depth:
             return
         self._load()
+        self._remember_batch_stamp()
         self._snapshot = dict(self._data)
         self._snapshot_overlay = dict(self._overlay)
         self._snapshot_overwrite = self._overwrite
@@ -396,6 +489,7 @@ class FileMap(MutableMapping[str, Any]):
             self._set_path_memory(path, value)
             return
         with self._lock:
+            self._refuse_if_absent()
             self._load()
             self._set_path_memory(path, value)
             self._write_locked()
@@ -405,9 +499,19 @@ class FileMap(MutableMapping[str, Any]):
             self._delete_path_memory(path)
             return
         with self._lock:
+            self._refuse_if_absent()
             self._load()
             self._delete_path_memory(path)
             self._write_locked()
+
+    def conflicts_with_batch(self) -> bool:
+        """True when the file changed or vanished since this batch loaded it."""
+        sig = file_signature(self._path)
+        if self._batch_mtime is None and self._batch_ino is None:
+            return sig is not None
+        if sig is None:
+            return True
+        return sig[0] != self._batch_mtime or sig[3] != self._batch_ino
 
     def _reload_if_needed(self) -> None:
         if self._batch_depth and not self._force:
@@ -417,36 +521,71 @@ class FileMap(MutableMapping[str, Any]):
         self._force = False
         self._load()
 
+    def _prepare_read(self) -> None:
+        self._reload_if_needed()
+        if self._batch_depth:
+            return
+        if not self._path.is_file():
+            raise Gone(str(self._path))
+
+    def _refuse_if_absent(self) -> None:
+        if self._path.is_dir():
+            raise IsADirectoryError(self._path)
+        if not self._path.is_file():
+            raise Gone(str(self._path))
+
+    def _remember_batch_stamp(self) -> None:
+        sig = file_signature(self._path)
+        if sig is None:
+            self._batch_mtime = None
+            self._batch_ino = None
+            return
+        self._batch_mtime = sig[0]
+        self._batch_ino = sig[3]
+
     def _ensure_loaded(self) -> None:
         if not self._loaded or self._reload.needs_reload():
             self._load()
 
+    def _mark_absent(self) -> None:
+        self._data = {}
+        self._base_sig = None
+        self._overlay.clear()
+        self._overwrite = False
+        self._loaded = True
+        self._reload.observe(None)
+
     def _load(self) -> None:
         last: Optional[BaseException] = None
-        for _ in range(8):
+        for attempt in range(4):
             signature = file_signature(self._path)
             try:
                 blob = self._path.read_bytes()
             except FileNotFoundError:
                 if file_signature(self._path) is None:
-                    self._install({}, None)
+                    self._mark_absent()
                     return
                 continue
+            if blob == b"":
+                raise EmptyFileError(f"{self._path} is empty")
             signature_after = file_signature(self._path)
             if signature != signature_after:
                 continue
             try:
-                data = {} if blob == b"" else self._codec.load(blob)
+                data = self._codec.load(blob)
             except Exception as exc:
                 last = exc
-                raise
+                if attempt == 3:
+                    break
+                time.sleep(0.002)
+                continue
             if not isinstance(data, dict):
                 raise DocumentError(
                     f"{self._path} contains a {type(data).__name__}, not a JSON object"
                 )
             self._install(data, signature_after)
             return
-        raise OSError(f"unstable reads from {self._path}") from last
+        raise DocumentError(f"{self._path} is not a JSON object") from last
 
     def _install(self, data: dict[str, Any], signature: Any) -> None:
         self._data = data
@@ -506,12 +645,9 @@ class FileMap(MutableMapping[str, Any]):
         self._put(top, cloned)
 
     def _read_document(self) -> dict[str, Any]:
-        try:
-            blob = self._path.read_bytes()
-        except FileNotFoundError:
-            return {}
+        blob = self._path.read_bytes()
         if blob == b"":
-            return {}
+            raise EmptyFileError(f"{self._path} is empty")
         data = self._codec.load(blob)
         if not isinstance(data, dict):
             raise DocumentError(
@@ -522,19 +658,27 @@ class FileMap(MutableMapping[str, Any]):
     def _write_locked(self) -> None:
         if not self._overlay and not self._overwrite:
             return
+        if self._batch_depth and not self._creating:
+            if self.conflicts_with_batch():
+                raise Conflict(f"{self._path} changed during the batch")
         saved = dict(self._data)
         saved_overlay = dict(self._overlay)
         saved_overwrite = self._overwrite
         try:
             for _ in range(8):
-                if self._overwrite:
+                signature = file_signature(self._path)
+                if self._overwrite or signature is None:
+                    if signature is None and not (self._creating or self._overwrite):
+                        raise Gone(str(self._path))
                     document = dict(self._data)
                 else:
                     # Always re-read. mtime_ns, ctime_ns, size, and inode can
                     # collide with an older observation when a clock is coarse
                     # and inodes are reused, so a writer must not trust them.
-                    signature = file_signature(self._path)
-                    document = self._read_document()
+                    try:
+                        document = self._read_document()
+                    except FileNotFoundError:
+                        raise Gone(str(self._path)) from None
                     if file_signature(self._path) != signature:
                         continue
                     for key, op in self._overlay.items():

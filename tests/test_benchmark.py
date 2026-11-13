@@ -15,8 +15,7 @@ def test_stat_benchmark_paths(tmp_path: Path) -> None:
     codec = CountingCodec()
     path = tmp_path / "bench.json"
     mapping = FileMap(path, codec, reload="stat")
-    mapping["k"] = 1
-    mapping["pad"] = "x" * 32
+    mapping.create({"k": 1, "pad": "x" * 32})
     # Writes re-read the file. Lookups of an unchanged file must not.
     baseline = codec.loads
     for _ in range(800):

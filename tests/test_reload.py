@@ -13,7 +13,7 @@ from order_trees.reload import file_signature
 def test_stat_strategy_stats_every_lookup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "state.json"
     mapping = FileMap(path, reload="stat")
-    mapping["a"] = 1
+    mapping.create({"a": 1})
     calls = {"n": 0}
     real = file_signature
 
@@ -33,7 +33,7 @@ def test_inotify_skips_stat_when_quiet(tmp_path: Path, monkeypatch: pytest.Monke
         mapping = FileMap(path, reload="inotify")
     except OSError as exc:
         pytest.skip(f"inotify unavailable: {exc}")
-    mapping["a"] = 1
+    mapping.create({"a": 1})
     assert mapping["a"] == 1
     calls = {"n": 0}
     real = file_signature

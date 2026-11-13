@@ -6,7 +6,7 @@ A dict that lives in a file. Lookups use memory. If the file changed, the next l
 from order_trees import FileMap
 
 m = FileMap("state.json")
-m["name"] = "alpha"
+m.create({"name": "alpha"})
 print(m["name"])
 ```
 
@@ -40,7 +40,7 @@ Nested dicts and lists are proxies. `m["child"]["k"] = 1` writes the file. `writ
 
 ## When a file disappears
 
-Agreed rules for a removed or renamed file are in [the file disappearance protocol](docs/protocol.md). This tree does not implement that protocol yet.
+Removed, renamed, and replaced files follow [the file disappearance protocol](docs/protocol.md). A missing path is not an empty document. `create` is how a file map writes a path that is not there yet. Assigning through a directory map does that too.
 
 ## Older constructors
 

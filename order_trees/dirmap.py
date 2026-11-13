@@ -12,14 +12,16 @@ clean exit. Field-level batches on one file are ``with folder[key].batch()``.
 
 from __future__ import annotations
 
+import copy
 import os
-from collections.abc import Iterator, Mapping, MutableMapping
+from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional, Union
 
 from order_trees.atomic import durable_unlink
 from order_trees.codec import Codec, JsonCodec
+from order_trees.errors import Conflict
 from order_trees.filemap import FileMap
 from order_trees.locking import FcntlLock
 from order_trees.reload import file_signature
@@ -55,6 +57,7 @@ class DirMap(MutableMapping[str, FileMap]):
         lock: Any = None,
         suffix: Optional[str] = None,
         write_through: bool = True,
+        on_remove: Optional[Callable[[str, Optional[dict[str, Any]]], None]] = None,
     ) -> None:
         self.path = Path(target)
         if self.path.exists() and not self.path.is_dir():
@@ -69,6 +72,9 @@ class DirMap(MutableMapping[str, FileMap]):
         self._suffix = chosen if chosen.startswith(".") else "." + chosen
         self._maps: dict[str, FileMap] = {}
         self._keys: set[str] = set()
+        self._seen: set[str] = set()
+        self._last_doc: dict[str, dict[str, Any]] = {}
+        self._on_remove = on_remove
         self._dir_sig: Any = _UNSEEN
         self._batch_depth = 0
         self._deferred: dict[str, FileMap] = {}
@@ -133,12 +139,22 @@ class DirMap(MutableMapping[str, FileMap]):
         key = _check_key(key)
         if self._batch_depth and key in self._pending_deletes:
             raise KeyError(key)
-        self._scan()
         path = self._file_path(key)
-        known = key in self._keys or key in self._maps
-        if not known and not path.exists():
+        deferred = (
+            self._batch_depth
+            and key in self._deferred
+            and key not in self._pending_deletes
+        )
+        if not path.is_file() and not deferred:
+            self._forget(key, notice=True)
             raise KeyError(key)
         fm = self._open(key)
+        self._seen.add(key)
+        if self._on_remove is not None and path.is_file():
+            try:
+                self._last_doc[key] = fm.to_dict()
+            except Exception:
+                pass
         if self._batch_depth:
             self._defer(key, fm)
         return fm
@@ -148,21 +164,35 @@ class DirMap(MutableMapping[str, FileMap]):
         if not isinstance(value, Mapping):
             raise TypeError("DirMap values are JSON objects (mappings)")
         fm = self._open(key)
+        path = self._file_path(key)
         if self._batch_depth:
             self._pending_deletes.discard(key)
             self._defer(key, fm)
             fm.replace(value)
+            self._seen.add(key)
             self._keys.add(key)
+            if self._on_remove is not None:
+                self._last_doc[key] = copy.deepcopy(dict(value))
             return
-        fm.replace(value)
+        if path.is_file():
+            fm.replace(value)
+        else:
+            try:
+                fm.create(value)
+            except FileExistsError:
+                fm.replace(value)
+        self._seen.add(key)
         self._keys.add(key)
+        if self._on_remove is not None:
+            self._last_doc[key] = fm.to_dict()
         self._dir_sig = _UNSEEN
 
     def __delitem__(self, key: str) -> None:
         key = _check_key(key)
-        self._scan()
         path = self._file_path(key)
-        if key not in self._keys and not path.exists() and key not in self._maps:
+        deferred = self._batch_depth and key in self._deferred
+        if not path.is_file() and not deferred and key not in self._pending_deletes:
+            self._forget(key, notice=True)
             raise KeyError(key)
         if self._batch_depth:
             fm = self._maps.get(key)
@@ -171,15 +201,27 @@ class DirMap(MutableMapping[str, FileMap]):
             self._pending_deletes.add(key)
             self._keys.discard(key)
             return
-        self._unlink(key)
+        self._remove_key(key)
+
+    def pop(self, key: str, default: Any = _UNSEEN) -> Any:
+        key = _check_key(key)
+        path = self._file_path(key)
+        if not path.is_file():
+            self._forget(key, notice=True)
+            if default is _UNSEEN:
+                raise KeyError(key)
+            return default
+        fm = self._open(key)
+        document = fm.to_dict()
+        self._remove_key(key, last=document)
+        return document
 
     def __iter__(self) -> Iterator[str]:
-        self._scan()
-        keys = set(self._keys)
-        if self._batch_depth:
-            keys -= self._pending_deletes
-            keys.update(key for key in self._deferred if key not in self._pending_deletes)
-        return iter(sorted(keys))
+        keys = self._live_keys()
+        self._notice_missing(set(keys))
+        for key in keys:
+            self._seen.add(key)
+        return iter(keys)
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
@@ -192,11 +234,20 @@ class DirMap(MutableMapping[str, FileMap]):
         except ValueError:
             return False
         if self._batch_depth and checked in self._pending_deletes:
+            if checked in self._seen:
+                self._forget(checked, notice=False)
             return False
-        self._scan()
-        return checked in self._keys or (
-            self._batch_depth and checked in self._maps and checked not in self._pending_deletes
+        deferred = (
+            self._batch_depth
+            and checked in self._deferred
+            and checked not in self._pending_deletes
         )
+        if deferred or self._file_path(checked).is_file():
+            self._seen.add(checked)
+            return True
+        if checked in self._seen:
+            self._forget(checked, notice=True)
+        return False
 
     def __repr__(self) -> str:
         return f"DirMap({str(self.path)!r}, keys={sorted(self)})"
@@ -233,23 +284,79 @@ class DirMap(MutableMapping[str, FileMap]):
 
     def _commit_batch(self) -> None:
         deletes = set(self._pending_deletes)
-        for key, fm in self._deferred.items():
-            if key in deletes:
-                fm.rollback_deferred()
-                continue
+        writers = [
+            (key, fm) for key, fm in self._deferred.items() if key not in deletes
+        ]
+        if any(fm.conflicts_with_batch() for _, fm in writers):
+            self._rollback_batch()
+            raise Conflict("a file changed during the directory batch")
+        for _, fm in writers:
             fm.commit_deferred()
         for key in deletes:
-            self._unlink(key)
+            self._remove_key(key)
 
     def _rollback_batch(self) -> None:
         for fm in self._deferred.values():
             fm.rollback_deferred()
         self._dir_sig = _UNSEEN
 
-    def _unlink(self, key: str) -> None:
+    def _live_keys(self) -> list[str]:
+        found: set[str] = set()
+        if self.path.is_dir():
+            with os.scandir(self.path) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if name.startswith(".") or not name.endswith(self._suffix):
+                        continue
+                    if not entry.is_file():
+                        continue
+                    found.add(name[: -len(self._suffix)])
+        if self._batch_depth:
+            found -= self._pending_deletes
+            found.update(
+                key for key in self._deferred if key not in self._pending_deletes
+            )
+        return sorted(found)
+
+    def _notice_missing(self, present: set[str]) -> None:
+        gone = [
+            key
+            for key in list(self._seen)
+            if key not in present and key not in self._pending_deletes
+        ]
+        for key in gone:
+            self._forget(key, notice=True)
+
+    def _forget(self, key: str, *, notice: bool) -> None:
+        was_seen = key in self._seen
+        self._seen.discard(key)
+        last = self._last_doc.pop(key, None)
+        if not notice or self._on_remove is None or not was_seen:
+            return
+        payload = copy.deepcopy(last) if isinstance(last, dict) else None
+        self._on_remove(key, payload)
+
+    def _remove_key(self, key: str, last: Optional[dict[str, Any]] = None) -> None:
+        if last is None and self._on_remove is not None:
+            fm = self._maps.get(key)
+            if fm is not None and fm.exists:
+                try:
+                    last = fm.to_dict()
+                except Exception:
+                    last = self._last_doc.get(key)
+            else:
+                last = self._last_doc.get(key)
         fm = self._maps.pop(key, None)
         if fm is not None:
             fm.close()
         durable_unlink(self._file_path(key))
         self._keys.discard(key)
+        self._seen.discard(key)
+        self._last_doc.pop(key, None)
         self._dir_sig = _UNSEEN
+        if self._on_remove is not None:
+            payload = copy.deepcopy(last) if isinstance(last, dict) else None
+            self._on_remove(key, payload)
+
+    def _unlink(self, key: str) -> None:
+        self._remove_key(key)

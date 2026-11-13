@@ -37,7 +37,7 @@ class DictProxy(MutableMapping[Any, Any]):
         self._path = path
 
     def _resolve(self) -> dict[Any, Any]:
-        self._root._reload_if_needed()
+        self._root._prepare_read()
         node: Any = self._root._data
         for part in self._path:
             node = node[part]
@@ -78,7 +78,7 @@ class ListProxy:
         self._path = path
 
     def _resolve(self) -> list[Any]:
-        self._root._reload_if_needed()
+        self._root._prepare_read()
         node: Any = self._root._data
         for part in self._path:
             node = node[part]
