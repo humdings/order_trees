@@ -161,12 +161,26 @@ A library write goes to a temp file in the same directory, fsyncs it, renames it
 
 Documents are small. A reader that sees partial or invalid JSON retries a few times, with a short pause between tries, so it can catch the file just as a rename lands. If the bytes are still not a JSON object after those tries, the read raises `DocumentError`. It does not install `{}` or any other stand-in document.
 
-A missing path is rule 2 (`Gone`), not an invalid document and not `{}`.
+A missing path is rule 2 (`Gone`), not an invalid document and not `{}`. A zero-byte file is partial JSON, rule 9, not an empty document.
 
 Tests, not implemented:
 
 - `tests/test_filemap.py::test_write_is_temp_file_then_atomic_rename` — a write renames a temp file in the same directory over the target, and fsyncs the file before the rename and the directory after it.
 - `tests/test_filemap.py::test_invalid_json_raises_after_retries` — a partial or invalid payload still fails after the short retries, the error is `DocumentError`, and the map's document is not `{}`.
+
+### 9. `{}` is an empty document, and a missing file is not
+
+A file whose bytes are `{}` is a live empty document. `gone` is false, `document == {}`, and `bool` is false because the document is empty. In a directory map the key is a member. Lookup returns that empty document. It does not raise `KeyError`.
+
+A missing path is the other case. The directory key is not a member (`KeyError` on lookup, `get` is `None`). A held file map is gone: `document` is `None` and reads raise `Gone`.
+
+A zero-byte file is not an empty document. It is partial JSON, the usual sign of a write still in progress or a truncated file. Readers retry as in rule 8, then raise `DocumentError`. They do not return `{}` and they do not report `Gone`. The path exists, so the directory key stays a member. The library never writes a zero-byte file. An empty map is written as the two bytes `{}`.
+
+Tests, not implemented:
+
+- `tests/test_filemap.py::test_missing_file_is_gone_and_empty_object_is_empty_document` — bytes `{}` load as `{}` with `gone` false. After the path is removed, `document` is `None`, reads raise `Gone`, and the directory key raises `KeyError`.
+- `tests/test_filemap.py::test_zero_byte_file_raises_after_retries` — a zero-length file raises `DocumentError` after the short retries. It is not `{}` and not `Gone`, and the directory key is still a member.
+- `tests/test_filemap.py::test_empty_map_is_written_as_empty_object` — clearing a document or writing `{}` stores `{}`, not a zero-length file.
 
 ## Open proposals
 
@@ -177,12 +191,6 @@ David has not decided these. They are not part of the agreed protocol above.
 Optional `DirMap(..., on_remove=fn)`. `fn(key)` runs when a membership check sees that a key from the previous check is gone. No callback is the default. The callback does not run for a key this map never observed. Failures in `fn` propagate and do not change membership.
 
 Test, not implemented: `tests/test_dirmap.py::test_on_remove_fires_once_per_disappeared_key`.
-
-### An empty file is not a missing file
-
-A path that exists and is empty, or that encodes `{}`, is a live empty document: `gone` is false and `document == {}`. A path that is absent is `Gone` and `document` is `None`. Readers do not use one of these as a stand-in for the other.
-
-Test, not implemented: `tests/test_filemap.py::test_missing_file_is_gone_and_empty_file_is_empty_document`.
 
 ### `pop` returns a plain dict
 
