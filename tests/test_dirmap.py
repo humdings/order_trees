@@ -11,6 +11,71 @@ from order_trees import DirMap
 from order_trees.atomic import atomic_write
 
 
+def test_held_document_survives_key_deletion(tmp_path: Path) -> None:
+    """A document already in hand keeps its fields after the file is removed."""
+    records = DirMap(tmp_path)
+    records["item-1"] = {
+        "id": "item-1",
+        "label": "alpha",
+        "count": 3,
+        "meta": {"n": 1},
+    }
+    held = records["item-1"]
+    meta = held["meta"]
+    del records["item-1"]
+
+    assert "item-1" not in records
+    assert not (tmp_path / "item-1.json").exists()
+    assert held["id"] == "item-1"
+    assert held["label"] == "alpha"
+    assert held["count"] == 3
+    assert meta["n"] == 1
+    assert "label" in held
+    assert len(held) == 4
+    assert list(held) == ["id", "label", "count", "meta"]
+    seen = []
+    for key in held:
+        seen.append((key, held[key]))
+    assert [key for key, _value in seen] == ["id", "label", "count", "meta"]
+    assert dict(held) == {
+        "id": "item-1",
+        "label": "alpha",
+        "count": 3,
+        "meta": {"n": 1},
+    }
+
+
+def test_held_document_survives_inotify_close(tmp_path: Path) -> None:
+    try:
+        records = DirMap(tmp_path, reload="inotify")
+    except OSError as exc:
+        pytest.skip(f"inotify unavailable: {exc}")
+    records["item-1"] = {"id": "item-1", "label": "alpha", "count": 3}
+    held = records["item-1"]
+    assert held["label"] == "alpha"
+    del records["item-1"]
+    assert held["id"] == "item-1"
+    assert held["count"] == 3
+    assert list(held) == ["id", "label", "count"]
+    held.close()
+
+
+def test_write_after_key_deletion_recreates_file(tmp_path: Path) -> None:
+    """A write on the held document creates the file again, keys included."""
+    records = DirMap(tmp_path)
+    records["item-1"] = {"id": "item-1", "label": "alpha", "count": 3}
+    held = records["item-1"]
+    del records["item-1"]
+    held["count"] = 4
+
+    on_disk = json.loads((tmp_path / "item-1.json").read_text())
+    assert on_disk == {"id": "item-1", "label": "alpha", "count": 4}
+    assert held["label"] == "alpha"
+    assert held["count"] == 4
+    assert records["item-1"]["label"] == "alpha"
+    assert records["item-1"]["count"] == 4
+
+
 def test_key_is_filename(tmp_path: Path) -> None:
     book = DirMap(tmp_path)
     book["a"] = {"name": "alpha", "count": 1}

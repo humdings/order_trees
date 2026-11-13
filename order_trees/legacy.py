@@ -299,8 +299,8 @@ class OrderTree(JsonCache):
             order = cls.from_order_id(order_id)
         except FileNotFoundError:
             return
-        # Read identifiers before unlinking. A missing file reloads as an
-        # empty document, and the id would be gone.
+        # Read identifiers before unlinking so cache cleanup does not depend
+        # on a later lookup.
         id_ = order.get(ID, order._id)
         secondary_id = order.get(ORDER_ID_FIELD)
         path = order.filename
@@ -407,8 +407,6 @@ class OrderTree(JsonCache):
 
     def move_completed(self) -> "OrderTree":
         self["_done"] = True
-        # Snapshot before the file disappears. A reload of a missing file
-        # would otherwise replace the document with {}.
         kept = dict(self._map._data)
         oid = kept.get(ORDER_ID_FIELD)
         id_ = kept[ID]
