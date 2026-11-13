@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import os
+import stat
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,7 +25,12 @@ from order_trees.codec import Codec, JsonCodec
 from order_trees.errors import Conflict
 from order_trees.filemap import FileMap
 from order_trees.locking import FcntlLock
-from order_trees.reload import file_signature
+from order_trees.reload import (
+    entry_is_regular_file,
+    file_signature,
+    is_directory,
+    is_regular_file,
+)
 
 _UNSEEN: Any = object()
 
@@ -60,7 +66,11 @@ class DirMap(MutableMapping[str, FileMap]):
         on_remove: Optional[Callable[[str, Optional[dict[str, Any]]], None]] = None,
     ) -> None:
         self.path = Path(target)
-        if self.path.exists() and not self.path.is_dir():
+        try:
+            mode = self.path.stat().st_mode
+        except FileNotFoundError:
+            mode = None
+        if mode is not None and not stat.S_ISDIR(mode):
             raise NotADirectoryError(self.path)
         self._codec = codec if codec is not None else JsonCodec()
         self._reload_spec = reload
@@ -102,13 +112,13 @@ class DirMap(MutableMapping[str, FileMap]):
         if signature == self._dir_sig:
             return
         keys: set[str] = set()
-        if self.path.is_dir():
+        if is_directory(self.path):
             with os.scandir(self.path) as entries:
                 for entry in entries:
                     name = entry.name
                     if name.startswith(".") or not name.endswith(self._suffix):
                         continue
-                    if not entry.is_file():
+                    if not entry_is_regular_file(entry):
                         continue
                     keys.add(name[: -len(self._suffix)])
         if self._batch_depth:
@@ -145,12 +155,12 @@ class DirMap(MutableMapping[str, FileMap]):
             and key in self._deferred
             and key not in self._pending_deletes
         )
-        if not path.is_file() and not deferred:
+        if not is_regular_file(path) and not deferred:
             self._forget(key, notice=True)
             raise KeyError(key)
         fm = self._open(key)
         self._seen.add(key)
-        if self._on_remove is not None and path.is_file():
+        if self._on_remove is not None and is_regular_file(path):
             try:
                 self._last_doc[key] = fm.to_dict()
             except Exception:
@@ -174,7 +184,7 @@ class DirMap(MutableMapping[str, FileMap]):
             if self._on_remove is not None:
                 self._last_doc[key] = copy.deepcopy(dict(value))
             return
-        if path.is_file():
+        if is_regular_file(path):
             fm.replace(value)
         else:
             try:
@@ -191,7 +201,7 @@ class DirMap(MutableMapping[str, FileMap]):
         key = _check_key(key)
         path = self._file_path(key)
         deferred = self._batch_depth and key in self._deferred
-        if not path.is_file() and not deferred and key not in self._pending_deletes:
+        if not is_regular_file(path) and not deferred and key not in self._pending_deletes:
             self._forget(key, notice=True)
             raise KeyError(key)
         if self._batch_depth:
@@ -206,7 +216,7 @@ class DirMap(MutableMapping[str, FileMap]):
     def pop(self, key: str, default: Any = _UNSEEN) -> Any:
         key = _check_key(key)
         path = self._file_path(key)
-        if not path.is_file():
+        if not is_regular_file(path):
             self._forget(key, notice=True)
             if default is _UNSEEN:
                 raise KeyError(key)
@@ -242,7 +252,7 @@ class DirMap(MutableMapping[str, FileMap]):
             and checked in self._deferred
             and checked not in self._pending_deletes
         )
-        if deferred or self._file_path(checked).is_file():
+        if deferred or is_regular_file(self._file_path(checked)):
             self._seen.add(checked)
             return True
         if checked in self._seen:
@@ -302,13 +312,13 @@ class DirMap(MutableMapping[str, FileMap]):
 
     def _live_keys(self) -> list[str]:
         found: set[str] = set()
-        if self.path.is_dir():
+        if is_directory(self.path):
             with os.scandir(self.path) as entries:
                 for entry in entries:
                     name = entry.name
                     if name.startswith(".") or not name.endswith(self._suffix):
                         continue
-                    if not entry.is_file():
+                    if not entry_is_regular_file(entry):
                         continue
                     found.add(name[: -len(self._suffix)])
         if self._batch_depth:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import errno
 import os
+import stat
 import struct
 import threading
 from pathlib import Path
@@ -58,12 +59,53 @@ def file_signature(path: Path) -> Optional[tuple[int, int, int, int]]:
 
     One ``stat`` call. ``ctime_ns`` is included because some clocks reuse a
     ``mtime_ns`` across several replaces, and inode numbers can be recycled.
+    ``FileNotFoundError`` is absence. Any other ``stat`` error, including
+    ``PermissionError``, propagates.
     """
     try:
         st = path.stat()
     except FileNotFoundError:
         return None
     return (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino)
+
+
+def is_regular_file(path: Path) -> bool:
+    """True when *path* is a regular file.
+
+    Absence (``ENOENT``) is false. ``PermissionError`` and any other
+    ``stat`` error propagate. ``Path.is_file()`` is not used, because it
+    also treats ``ENOTDIR`` and ``ELOOP`` as "not a file".
+    """
+    try:
+        mode = path.stat().st_mode
+    except FileNotFoundError:
+        return False
+    return stat.S_ISREG(mode)
+
+
+def is_directory(path: Path) -> bool:
+    """True when *path* is a directory. Absence is false.
+
+    Other ``stat`` errors, including ``PermissionError``, propagate.
+    """
+    try:
+        mode = path.stat().st_mode
+    except FileNotFoundError:
+        return False
+    return stat.S_ISDIR(mode)
+
+
+def entry_is_regular_file(entry: os.DirEntry[str]) -> bool:
+    """True when a directory entry is a regular file.
+
+    A name that disappeared between ``scandir`` and ``stat`` is false.
+    ``PermissionError`` propagates.
+    """
+    try:
+        mode = entry.stat().st_mode
+    except FileNotFoundError:
+        return False
+    return stat.S_ISREG(mode)
 
 
 class StatReload:
