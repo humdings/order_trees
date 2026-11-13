@@ -1,10 +1,20 @@
 # File disappearance protocol
 
-This is the behavior when a mapped file is removed, renamed, or replaced at the same path. It is the agreed protocol. Nothing in this tree implements it yet.
+This is the behavior when a mapped file is removed, renamed, or replaced at the same path. Every item below is agreed. Nothing in this tree implements it yet.
 
 Examples use a directory mapping `records` and documents shaped like `{"label": "alpha", "count": 3}`. `a.json` is the file for key `"a"`.
 
-`Gone` will be an exception in `order_trees.errors`, a subclass of `KeyError`. Its message includes the path.
+`Gone` will be an exception in `order_trees.errors`, a subclass of `KeyError`. Its message includes the path. `Conflict`, `EmptyFileError` (`DocumentError`), and `DocumentError` are the other errors named below.
+
+## Summary
+
+A missing file drops out of a directory map on the next membership check. There is no tombstone. Lookup raises `KeyError` and `get` returns `None`. A held file map for that path has `document is None` and raises `Gone` on read. Writes do not recreate it. `FileMap.create` and a directory-map assignment are the explicit recreates.
+
+`mv a.json b.json` drops `"a"` and adds `"b"`. The held `"a"` object is gone. An overwrite or a move onto `a.json` keeps `"a"` and the held object loads the new bytes. Membership stats the disk on every check, so a directory mtime cache cannot lag.
+
+A `batch` that loaded a file an outsider then changed or removed raises `Conflict` and leaves that disk state. The race should be rare. Library writes are a temp file and an atomic rename. Non-empty partial or invalid JSON is retried a few times, then `DocumentError`. A zero-byte file raises `EmptyFileError` immediately. Bytes `{}` are a real empty document. The library writes an empty map as `{}`.
+
+`DirMap.pop` deletes the file and returns a plain dict. `FileMap.pop` removes one field and writes the document. Legacy cache objects follow the gone rule. Advisory locks coordinate library users only. Outside edits are detected, not blocked. An optional `on_remove(key, last_document_or_None)` runs once when a directory map notices a key is gone. The default is no callback.
 
 ## Agreed
 
@@ -213,12 +223,21 @@ The lock does not stop a shell `rm`, `mv`, or overwrite. Those edits are detecte
 
 Test, not implemented: `tests/test_concurrency.py::test_library_writers_exclude_each_other_and_rm_does_not_take_the_lock` — one library writer blocks another on the same file, and a shell `rm` during that lock returns without waiting. The removal is then visible as `Gone` or as a `Conflict` on commit, not as a blocked `rm`.
 
-## Open proposals
+### 13. An optional callback when a key disappears
 
-David has not decided this. It is not part of the agreed protocol above.
+`DirMap(..., on_remove=None)`. `on_remove` is a callable `(key, last_document_or_None)` or `None`. `None` is the default and is a no-op: the map does not call anything and does not copy documents for a callback. No polling thread and no extra watcher are added for it. The only work is during a disk check the caller already made, or during `del` / `pop`.
 
-### Removed-key callback
+It runs once per removal, when this map first notices that a key it had observed is gone:
 
-Optional `DirMap(..., on_remove=fn)`. `fn(key)` runs when a membership check sees that a key from the previous check is gone. No callback is the default. The callback does not run for a key this map never observed. Failures in `fn` propagate and do not change membership.
+- an external `rm` or a rename away, noticed by the next `in`, lookup, iteration, or `len`
+- `del records[key]` and `DirMap.pop(key)` in this process
 
-Test, not implemented: `tests/test_dirmap.py::test_on_remove_fires_once_per_disappeared_key`.
+It does not run for a same-path replacement. The key is still there. A key this map never observed does not produce a call. Removing the same key again, after it was recreated, is a new removal and runs the callback once more.
+
+`key` is the string key. `last_document_or_None` is a plain dict copy of the last document this map loaded for that key, or `None` if it never loaded one. It is not a `FileMap`. Editing the dict does not write. The map does not open a deleted file just to fill this argument.
+
+The key is already absent when the callback runs, including when the callback was `del` or `pop` and the file is already deleted. An exception from `on_remove` propagates to the caller. The map does not put the key back and does not call `on_remove` for further keys in that same check.
+
+Test, not implemented:
+
+- `tests/test_dirmap.py::test_on_remove_fires_once_per_disappeared_key` — with no callback, an external `rm` does no extra work and raises nothing from a callback. With `on_remove`, an external `rm` noticed by iteration calls it once with `("a", {"label": "alpha"})` if that document had been loaded, and with `("a", None)` if only the name had been seen. `del` and `pop` each call it once. A second check does not call it again. A same-path overwrite does not call it. A raised exception propagates, and the key stays absent.
