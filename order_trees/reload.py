@@ -159,6 +159,10 @@ class InotifyReload:
         self._fd = fd
 
     def needs_reload(self) -> bool:
+        if self._fd < 0:
+            if not self._ready:
+                return True
+            return self._stat.needs_reload()
         if not self._ready or self._force:
             self._force = False
             return True
@@ -168,7 +172,8 @@ class InotifyReload:
         return self._stat.needs_reload()
 
     def observe(self, signature: Any) -> None:
-        self._drain()
+        if self._fd >= 0:
+            self._drain()
         current = file_signature(self.path)
         if current != signature:
             # An event arrived as we wrote, or a writer that ignores the
@@ -187,6 +192,8 @@ class InotifyReload:
 
     def _drain(self) -> str:
         """Return ``none``, ``hit``, or ``overflow`` after emptying the queue."""
+        if self._fd < 0:
+            return "overflow"
         hit = False
         overflow = False
         while True:

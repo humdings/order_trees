@@ -6,7 +6,7 @@ A dict that lives in a file. Lookups use memory. If the file changed, the next l
 from order_trees import FileMap
 
 m = FileMap("state.json")
-m["name"] = "alpha"
+m.create({"name": "alpha"})
 print(m["name"])
 ```
 
@@ -37,6 +37,10 @@ Conflict policy is overlay. On a partial write, if the file changed since the la
 `modify(key, fn)` and `with m.batch():` hold the lock across the read and the write, and a batch writes once. An exception inside `batch()` does not write. `m[k] = m[k] + 1` is not atomic; the read happens before the lock.
 
 Nested dicts and lists are proxies. `m["child"]["k"] = 1` writes the file. `write_through=False` returns a copy instead, and that copy is stored only if you assign it back.
+
+## When a file disappears
+
+Removed, renamed, and replaced files follow [the file disappearance protocol](docs/protocol.md). A missing path is not an empty document. `create` is how a file map writes a path that is not there yet. Assigning through a directory map does that too.
 
 ## Older constructors
 

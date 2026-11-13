@@ -29,8 +29,11 @@ def bench_unchanged(
     codec: Any = None,
 ) -> dict[str, Any]:
     m = FileMap(path, codec, reload=reload)
-    m["k"] = 1
-    m["pad"] = "x" * 32
+    if path.is_file():
+        m["k"] = 1
+        m["pad"] = "x" * 32
+    else:
+        m.create({"k": 1, "pad": "x" * 32})
     for _ in range(50):
         m["k"]
     start = time.perf_counter_ns()
@@ -54,7 +57,11 @@ def bench_changed(
 ) -> dict[str, Any]:
     codec = codec if codec is not None else JsonCodec()
     m = FileMap(path, codec, reload=reload)
-    m["k"] = 0
+    if path.is_file():
+        m["k"] = 0
+        m["pad"] = "x" * 32
+    else:
+        m.create({"k": 0, "pad": "x" * 32})
     blobs = [codec.dump({"k": i, "pad": "x" * 32}) for i in range(2)]
     # Warm the watcher so the first measured lookup is not the initial load.
     tmp = path.with_name(".bench-warm.tmp")
