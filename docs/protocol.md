@@ -201,18 +201,24 @@ Per-file objects from the legacy constructors follow rules 2 and 3 for both `use
 
 Test, not implemented: `tests/test_compat.py::test_legacy_object_goes_gone_for_both_cache_settings`.
 
+### 12. Locks coordinate library users; outside edits are detected
+
+The guarantee is advisory `flock` on the sibling lock file, and the directory lock taken by `DirMap.batch`. A library writer waits for another library writer that holds the lock. The lock file is not the document.
+
+The lock does not stop a shell `rm`, `mv`, or overwrite. Those edits are detected, not prevented:
+
+- A library write still lands by the atomic rename in rule 8, so a crash does not leave a half-written document.
+- A `batch` that loaded a file an outsider then changed or removed raises `Conflict` and leaves that outsider's disk state, rule 7.
+- A removed path is gone, rule 2. A replacement at the same path is loaded, rule 5. A rename to another key drops the old key, rule 4.
+
+Test, not implemented: `tests/test_concurrency.py::test_library_writers_exclude_each_other_and_rm_does_not_take_the_lock` — one library writer blocks another on the same file, and a shell `rm` during that lock returns without waiting. The removal is then visible as `Gone` or as a `Conflict` on commit, not as a blocked `rm`.
+
 ## Open proposals
 
-David has not decided these. They are not part of the agreed protocol above.
+David has not decided this. It is not part of the agreed protocol above.
 
 ### Removed-key callback
 
 Optional `DirMap(..., on_remove=fn)`. `fn(key)` runs when a membership check sees that a key from the previous check is gone. No callback is the default. The callback does not run for a key this map never observed. Failures in `fn` propagate and do not change membership.
 
 Test, not implemented: `tests/test_dirmap.py::test_on_remove_fires_once_per_disappeared_key`.
-
-### Locks coordinate library users only
-
-`flock` on the sibling lock file is the guarantee between users of this library. A holder of the lock can rely on other library writers waiting. The lock does not stop a shell `rm`, `mv`, or overwrite. Those are the implicit deletes and replacements in the rules above. The lock file is not the document.
-
-Test, not implemented: `tests/test_concurrency.py::test_library_writers_exclude_each_other_and_rm_does_not_take_the_lock`.
